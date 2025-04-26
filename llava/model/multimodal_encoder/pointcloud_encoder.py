@@ -2,11 +2,8 @@ import torch
 import torch.nn as nn
 import spconv.pytorch as spconv
 from torch_geometric.utils import scatter
-from pointgroup_ops import voxelization
-from pointops import farthest_point_sampling
 from .custom_spconv_module.spconv_layers import SubMConv3d
 from .custom_spconv_module.batchnorm import BatchNorm1d
-from .unproject import voxelize
 import spconv.pytorch as spconv
 import pathlib
 from llava.utils import load_config
@@ -107,45 +104,6 @@ class SPConvPointCloudTower(nn.Module):
         for name, val in checkpoint.items():
             checkpoint_to_load[name.replace("module.", "")] = val
         missing, unexpected = self.segmentor.load_state_dict(checkpoint_to_load, strict=False)
-
-    def sample_pointcloud_tokens(self, batch_size, super_pts_feat, super_pts_coord):
-        super_pts_offset = []
-        count = 0
-        for cur_coord in super_pts_coord:
-            super_pts_offset.append(count + cur_coord.shape[0])
-            count += cur_coord.shape[0]
-
-        super_pts_feat_all = torch.cat(super_pts_feat, dim=0)
-        super_pts_coord = torch.cat(super_pts_coord, dim=0)
-        compute_dtype = super_pts_feat_all.dtype
-        with torch.cuda.amp.autocast(enabled=False):
-            super_pts_offset = torch.tensor(super_pts_offset).to(device=super_pts_coord.device)
-            super_pts_offset = super_pts_offset.int()
-            num_out = []
-            count = 0
-            for i in range(batch_size):
-                count += min(self.num_pc_tokens, super_pts_feat[i].shape[0])
-                num_out.append(count)
-            num_out_tensor = torch.cuda.IntTensor(num_out)
-            
-            sampled_idx = farthest_point_sampling(super_pts_coord.float(), super_pts_offset, num_out_tensor)
-
-        count = 0
-        idx_offset = 0
-        key_super_pts_idx = []
-        key_super_pts_pos = []
-        key_super_pts_feat = []
-        
-        for i in range(batch_size):
-            idx = sampled_idx[idx_offset:num_out[i]]
-            unq_idx = idx.unique()
-            key_super_pts_idx.append(unq_idx.long() - count)
-            key_super_pts_pos.append(super_pts_coord[unq_idx.long()].to(compute_dtype))
-            key_super_pts_feat.append(super_pts_feat_all[unq_idx.long()])
-            idx_offset = num_out[i]
-            count = super_pts_offset[i]
-        
-        return key_super_pts_pos, key_super_pts_feat
 
     def forward(self, coord, grid_coord, offset, feat, p2v_map, v2p_map, spatial_shape, superpoint_mask, prompt_mask):
         batch_size = len(offset)
